@@ -1,0 +1,15 @@
+pandas
+numpy
+scikit-learn
+torch
+torchvision
+Pillow
+tqdm
+matplotlib
+seaborn
+dvc
+dvc-s3
+dvclive
+pyyaml
+jupyter
+notebook
