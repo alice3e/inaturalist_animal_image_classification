@@ -4,7 +4,7 @@
 /models
 
 # DVCLive - НЕ должен быть в Git
-/dvclive
+/dvclive/
 
 # Python
 __pycache__/
