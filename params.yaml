@@ -4,13 +4,13 @@ model:
   num_classes: 5
 
 training:
-  num_epochs: 25
+  num_epochs: 5
   batch_size: 32
   learning_rate: 0.001
   optimizer: Adam
-  
+
 augmentation:
-  resize: 256
+  resize: 512
   crop_size: 224
   brightness: 0.2
   contrast: 0.2
