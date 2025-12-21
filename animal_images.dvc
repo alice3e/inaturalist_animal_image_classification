@@ -1,6 +1,6 @@
 outs:
-- md5: b422cbecf48f8f0588ef4017631b8a73.dir
-  size: 1550573918
-  nfiles: 12000
+- md5: 5b0afef6f96fba8e6e9498937e7b06da.dir
+  size: 1550580066
+  nfiles: 12001
   hash: md5
   path: animal_images

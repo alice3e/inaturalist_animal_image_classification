@@ -1,22 +1,22 @@
 model:
-  name: resnet101
+  name: efficientnet_v2_m
   pretrained: IMAGENET1K_V1
   num_classes: 5
 
 training:
-  num_epochs: 15
+  num_epochs: 20
   batch_size: 32
   learning_rate: 0.001
   optimizer: Adam
 
 augmentation:
-  resize: 512
+  resize: 384
   crop_size: 224
   brightness: 0.2
   contrast: 0.2
   
 scheduler:
-  step_size: 3
+  step_size: 5
   gamma: 0.1
   
 data:
