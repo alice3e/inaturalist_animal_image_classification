@@ -1,8 +1,8 @@
 """
-Модуль для работы с векторной базой данных FAISS
+Модуль для работы с векторной базой данных ChromaDB
 """
 
-import faiss
+import chromadb
 import numpy as np
 import json
 from pathlib import Path
@@ -11,34 +11,38 @@ from datetime import datetime
 
 
 class VectorDatabase:
-    """Класс для работы с FAISS индексом и метаданными изображений"""
+    """Класс для работы с ChromaDB индексом и метаданными изображений"""
     
     def __init__(
         self,
-        index_path: Optional[Path] = None,
-        metadata_path: Optional[Path] = None
+        chroma_path: Optional[Path] = None,
+        metadata_path: Optional[Path] = None,
+        collection_name: str = "animal_embeddings"
     ):
         """
         Инициализация векторной БД
         
         Args:
-            index_path: путь к FAISS индексу
+            chroma_path: путь к директории ChromaDB
             metadata_path: путь к JSON файлу с метаданными
+            collection_name: название коллекции в ChromaDB
         """
-        self.index = None
+        self.client = None
+        self.collection = None
         self.metadata = None
         self.embedding_dim = None
+        self.collection_name = collection_name
         
-        if index_path and metadata_path:
-            self.load(index_path, metadata_path)
+        if chroma_path and metadata_path:
+            self.load(chroma_path, metadata_path)
     
-    def create_index(
+    def create_collection(
         self,
         embedding_dim: int,
         use_cosine: bool = True
     ) -> None:
         """
-        Создает новый FAISS индекс
+        Создает новую ChromaDB коллекцию
         
         Args:
             embedding_dim: размерность эмбеддингов
@@ -46,13 +50,28 @@ class VectorDatabase:
         """
         self.embedding_dim = embedding_dim
         
+        # Создаем persistent клиент
+        if not hasattr(self, 'chroma_path'):
+            raise ValueError("Не указан путь для ChromaDB")
+        
+        self.client = chromadb.PersistentClient(path=str(self.chroma_path))
+        
+        # Удаляем коллекцию если существует
+        try:
+            self.client.delete_collection(name=self.collection_name)
+        except:
+            pass
+        
+        # Создаем новую коллекцию
         if use_cosine:
-            # IndexFlatIP для косинусного расстояния (Inner Product)
-            # Требует нормализации векторов
-            self.index = faiss.IndexFlatIP(embedding_dim)
+            space = "cosine"
         else:
-            # IndexFlatL2 для Euclidean расстояния
-            self.index = faiss.IndexFlatL2(embedding_dim)
+            space = "l2"
+        
+        self.collection = self.client.create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": space}
+        )
         
         self.metadata = {
             'images': [],
@@ -60,7 +79,8 @@ class VectorDatabase:
                 'total_images': 0,
                 'embedding_dim': embedding_dim,
                 'use_cosine_similarity': use_cosine,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now().isoformat(),
+                'collection_name': self.collection_name
             }
         }
     
@@ -68,125 +88,162 @@ class VectorDatabase:
         self,
         embeddings: np.ndarray,
         image_metadata: List[Dict],
-        normalize: bool = True
+        batch_size: int = 1000
     ) -> None:
         """
-        Добавляет эмбеддинги в индекс
+        Добавляет эмбеддинги в коллекцию
         
         Args:
             embeddings: массив эмбеддингов [N, embedding_dim]
             image_metadata: список метаданных для каждого изображения
-            normalize: нормализовать ли векторы (для косинусного расстояния)
+            batch_size: размер батча для добавления
         """
-        if self.index is None:
-            raise ValueError("Индекс не создан. Используйте create_index() или load()")
+        if self.collection is None:
+            raise ValueError("Коллекция не создана. Используйте create_collection() или load()")
         
-        # Нормализуем векторы для косинусного расстояния
-        if normalize:
-            faiss.normalize_L2(embeddings)
+        # Подготавливаем данные для ChromaDB
+        ids = [meta['uuid'] for meta in image_metadata]
+        embeddings_list = embeddings.tolist()
         
-        # Добавляем в индекс
-        self.index.add(embeddings)
+        # Подготавливаем метаданные
+        metadatas = [
+            {
+                'scientific_name': meta['scientific_name'],
+                'path': meta['path'],
+                'embedding_index': str(meta.get('embedding_index', i))
+            }
+            for i, meta in enumerate(image_metadata)
+        ]
+        
+        # Добавляем данные батчами
+        num_batches = (len(ids) + batch_size - 1) // batch_size
+        
+        for i in range(0, len(ids), batch_size):
+            batch_end = min(i + batch_size, len(ids))
+            
+            self.collection.add(
+                ids=ids[i:batch_end],
+                embeddings=embeddings_list[i:batch_end],
+                metadatas=metadatas[i:batch_end]
+            )
         
         # Обновляем метаданные
-        start_idx = len(self.metadata['images'])
-        for i, meta in enumerate(image_metadata):
-            meta['embedding_index'] = start_idx + i
-            self.metadata['images'].append(meta)
-        
-        self.metadata['metadata']['total_images'] = len(self.metadata['images'])
+        if self.metadata is None:
+            self.metadata = {
+                'images': [],
+                'metadata': {
+                    'total_images': 0,
+                    'embedding_dim': self.embedding_dim,
+                    'use_cosine_similarity': True,
+                    'created_at': datetime.now().isoformat(),
+                    'collection_name': self.collection_name
+                }
+            }
+        self.metadata['images'] = image_metadata
+        self.metadata['metadata']['total_images'] = len(image_metadata)
     
     def search(
         self,
         query_embedding: np.ndarray,
-        k: int = 10,
-        normalize: bool = True
-    ) -> Tuple[np.ndarray, np.ndarray, List[Dict]]:
+        k: int = 10
+    ) -> Tuple[List[float], List[str], List[Dict]]:
         """
         Ищет k ближайших соседей для запроса
         
         Args:
             query_embedding: эмбеддинг запроса [1, embedding_dim]
             k: количество ближайших соседей
-            normalize: нормализовать ли вектор запроса
             
         Returns:
             distances: расстояния до ближайших соседей
-            indices: индексы ближайших соседей
+            indices: UUID найденных изображений
             results: метаданные найденных изображений
         """
-        if self.index is None:
-            raise ValueError("Индекс не загружен")
+        if self.collection is None:
+            raise ValueError("Коллекция не загружена")
         
-        # Нормализуем вектор запроса
-        if normalize:
-            faiss.normalize_L2(query_embedding)
+        # Ищем похожие
+        results = self.collection.query(
+            query_embeddings=query_embedding.tolist(),
+            n_results=k,
+            include=['metadatas', 'distances']
+        )
         
-        # Выполняем поиск
-        distances, indices = self.index.search(query_embedding, k)
+        # Форматируем результаты
+        distances = results['distances'][0] if results['distances'] else []
+        uuids = results['ids'][0] if results['ids'] else []
+        metadatas = results['metadatas'][0] if results['metadatas'] else []
         
-        # Получаем метаданные для найденных изображений
-        results = []
-        for i, idx in enumerate(indices[0]):
-            if idx < len(self.metadata['images']):
-                result = self.metadata['images'][idx].copy()
-                result['distance'] = float(distances[0][i])
-                
-                # Конвертируем расстояние в процент похожести
-                if self.metadata['metadata'].get('use_cosine_similarity', True):
-                    # Для косинусного расстояния (Inner Product после нормализации)
-                    # Значение от -1 до 1, конвертируем в проценты
-                    similarity = (distances[0][i] + 1) / 2 * 100
-                else:
-                    # Для L2 расстояния конвертируем в похожесть
-                    # Чем меньше расстояние, тем больше похожесть
-                    similarity = max(0, 100 - distances[0][i] * 10)
-                
-                result['similarity'] = float(similarity)
-                results.append(result)
+        # Создаем список результатов
+        formatted_results = []
+        for i, (uuid, distance, meta) in enumerate(zip(uuids, distances, metadatas)):
+            result = {
+                'uuid': uuid,
+                'distance': float(distance),
+                'scientific_name': meta['scientific_name'],
+                'path': meta['path'],
+                'embedding_index': int(meta['embedding_index'])
+            }
+            
+            # Конвертируем расстояние в процент похожести
+            # Для косинусного расстояния: similarity = 1 - distance
+            similarity = (1 - distance) * 100
+            result['similarity'] = float(similarity)
+            
+            formatted_results.append(result)
         
-        return distances, indices, results
+        return distances, uuids, formatted_results
     
     def save(
         self,
-        index_path: Path,
+        chroma_path: Path,
         metadata_path: Path
     ) -> None:
         """
-        Сохраняет индекс и метаданные на диск
+        Сохраняет коллекцию и метаданные на диск
         
         Args:
-            index_path: путь для сохранения FAISS индекса
+            chroma_path: путь для сохранения ChromaDB
             metadata_path: путь для сохранения метаданных
         """
-        if self.index is None:
-            raise ValueError("Индекс не создан")
+        if self.collection is None:
+            raise ValueError("Коллекция не создана")
         
-        # Создаем директории если нужно
-        index_path.parent.mkdir(parents=True, exist_ok=True)
+        # ChromaDB автоматически сохраняется в persistent mode
+        # Просто сохраняем метаданные
         metadata_path.parent.mkdir(parents=True, exist_ok=True)
         
-        # Сохраняем индекс
-        faiss.write_index(self.index, str(index_path))
-        
-        # Сохраняем метаданные
         with open(metadata_path, 'w', encoding='utf-8') as f:
             json.dump(self.metadata, f, indent=2, ensure_ascii=False)
     
     def load(
         self,
-        index_path: Path,
+        chroma_path: Path,
         metadata_path: Path
     ) -> None:
         """
-        Загружает индекс и метаданные с диска
+        Загружает коллекцию и метаданные с диска
         
         Args:
-            index_path: путь к FAISS индексу
+            chroma_path: путь к директории ChromaDB
             metadata_path: путь к метаданным
         """
-        # Загружаем индекс
-        self.index = faiss.read_index(str(index_path))
+        self.chroma_path = chroma_path
+        
+        # Загружаем ChromaDB клиент
+        self.client = chromadb.PersistentClient(path=str(chroma_path))
+        
+        # Получаем коллекцию
+        try:
+            self.collection = self.client.get_collection(name=self.collection_name)
+        except Exception as e:
+            # Проверяем, существует ли коллекция
+            collections = self.client.list_collections()
+            collection_names = [col.name for col in collections]
+            if self.collection_name not in collection_names:
+                raise ValueError(f"Коллекция '{self.collection_name}' не найдена. Доступные коллекции: {collection_names}")
+            else:
+                raise ValueError(f"Не удалось загрузить коллекцию '{self.collection_name}': {e}")
         
         # Загружаем метаданные
         with open(metadata_path, 'r', encoding='utf-8') as f:
@@ -195,16 +252,17 @@ class VectorDatabase:
         self.embedding_dim = self.metadata['metadata']['embedding_dim']
     
     def get_stats(self) -> Dict:
-        """Возвращает статистику по индексу"""
-        if self.index is None or self.metadata is None:
+        """Возвращает статистику по коллекции"""
+        if self.collection is None or self.metadata is None:
             return {}
         
         stats = {
-            'total_vectors': self.index.ntotal,
+            'total_vectors': self.collection.count(),
             'embedding_dim': self.embedding_dim,
             'total_images': self.metadata['metadata']['total_images'],
             'use_cosine': self.metadata['metadata'].get('use_cosine_similarity', True),
-            'created_at': self.metadata['metadata'].get('created_at', 'unknown')
+            'created_at': self.metadata['metadata'].get('created_at', 'unknown'),
+            'collection_name': self.collection_name
         }
         
         # Статистика по классам
@@ -217,10 +275,12 @@ class VectorDatabase:
         
         return stats
     
-    def get_image_by_index(self, index: int) -> Optional[Dict]:
-        """Получает метаданные изображения по индексу"""
-        if self.metadata and 0 <= index < len(self.metadata['images']):
-            return self.metadata['images'][index]
+    def get_image_by_uuid(self, uuid: str) -> Optional[Dict]:
+        """Получает метаданные изображения по UUID"""
+        if self.metadata:
+            for img in self.metadata['images']:
+                if img.get('uuid') == uuid:
+                    return img
         return None
     
     def get_all_images(self) -> List[Dict]:

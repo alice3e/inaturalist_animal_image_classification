@@ -16,13 +16,13 @@ class EmbeddingExtractor(nn.Module):
     
     def __init__(self, base_model):
         super().__init__()
-        # Для EfficientNet: features + avgpool (без классификационного слоя)
-        self.features = base_model.features
-        self.avgpool = base_model.avgpool
+        # Для EfficientNet V2 M: используем все слои до классификатора
+        self.base_model = base_model
         
     def forward(self, x):
-        x = self.features(x)
-        x = self.avgpool(x)
+        # Используем все слои до классификатора
+        x = self.base_model.features(x)
+        x = self.base_model.avgpool(x)
         x = torch.flatten(x, 1)
         return x
 
@@ -125,7 +125,11 @@ def extract_embedding_from_image(
     ])
     
     # Применяем трансформации
-    image_tensor = transform(image).unsqueeze(0)  # Добавляем batch dimension
+    image_tensor = transform(image)
+    # Явно указываем, что это torch.Tensor
+    if not isinstance(image_tensor, torch.Tensor):
+        raise TypeError(f"Expected torch.Tensor, got {type(image_tensor)}")
+    image_tensor = image_tensor.unsqueeze(0)  # Добавляем batch dimension
     image_tensor = image_tensor.to(device)
     
     # Извлекаем эмбеддинг

@@ -1,5 +1,5 @@
 """
-Модуль для поиска похожих изображений
+Модуль для поиска похожих изображений с использованием ChromaDB
 """
 
 from pathlib import Path
@@ -12,13 +12,14 @@ from vector_db import VectorDatabase
 
 
 class SimilaritySearch:
-    """Класс для поиска похожих изображений"""
+    """Класс для поиска похожих изображений с ChromaDB"""
     
     def __init__(
         self,
         model_path: Path,
-        index_path: Path,
+        chroma_path: Path,
         metadata_path: Path,
+        collection_name: str = "animal_embeddings",
         device: Optional[torch.device] = None
     ):
         """
@@ -26,8 +27,9 @@ class SimilaritySearch:
         
         Args:
             model_path: путь к файлу модели
-            index_path: путь к FAISS индексу
+            chroma_path: путь к директории ChromaDB
             metadata_path: путь к метаданным
+            collection_name: название коллекции в ChromaDB
             device: устройство для вычислений
         """
         # Загружаем модель для извлечения эмбеддингов
@@ -37,10 +39,14 @@ class SimilaritySearch:
         self.device = device if device else torch.device("cpu")
         
         # Загружаем векторную БД
-        self.vector_db = VectorDatabase(index_path, metadata_path)
+        self.vector_db = VectorDatabase(
+            chroma_path=chroma_path,
+            metadata_path=metadata_path,
+            collection_name=collection_name
+        )
         
         print(f"✓ Модель загружена (embedding_dim={self.embedding_dim})")
-        print(f"✓ Индекс загружен ({self.vector_db.index.ntotal} векторов)")
+        print(f"✓ ChromaDB загружена ({self.vector_db.collection.count()} векторов)")
     
     def find_similar(
         self,
@@ -64,7 +70,7 @@ class SimilaritySearch:
                     'similarity': 95.5,
                     'scientific_name': 'Canis lupus',
                     'uuid': '...',
-                    'distance': 0.95
+                    'distance': 0.05
                 },
                 ...
             ]
@@ -79,10 +85,9 @@ class SimilaritySearch:
         )
         
         # Ищем похожие
-        distances, indices, results = self.vector_db.search(
+        distances, uuids, results = self.vector_db.search(
             query_embedding,
-            k=top_k,
-            normalize=False  # Уже нормализовали в extract_embedding_from_image
+            k=top_k
         )
         
         # Форматируем результаты
@@ -109,7 +114,7 @@ class SimilaritySearch:
         return formatted_results
     
     def get_stats(self) -> Dict:
-        """Возвращает статистику по индексу"""
+        """Возвращает статистику по коллекции"""
         return self.vector_db.get_stats()
     
     def find_similar_by_path(
@@ -129,20 +134,46 @@ class SimilaritySearch:
         """
         image = Image.open(image_path).convert('RGB')
         return self.find_similar(image, top_k)
+    
+    def find_similar_by_uuid(
+        self,
+        uuid: str,
+        top_k: int = 10
+    ) -> List[Dict]:
+        """
+        Находит похожие изображения по UUID существующего изображения
+        
+        Args:
+            uuid: UUID изображения из базы данных
+            top_k: количество похожих изображений
+            
+        Returns:
+            Список похожих изображений
+        """
+        # Получаем эмбеддинг по UUID
+        image_meta = self.vector_db.get_image_by_uuid(uuid)
+        if not image_meta:
+            raise ValueError(f"Изображение с UUID '{uuid}' не найдено")
+        
+        # Получаем путь к изображению
+        image_path = Path(__file__).parent.parent / image_meta['path']
+        return self.find_similar_by_path(image_path, top_k)
 
 
 def create_similarity_search(
     model_path: Optional[Path] = None,
-    index_path: Optional[Path] = None,
-    metadata_path: Optional[Path] = None
+    chroma_path: Optional[Path] = None,
+    metadata_path: Optional[Path] = None,
+    collection_name: str = "animal_embeddings"
 ) -> SimilaritySearch:
     """
     Создает экземпляр SimilaritySearch с путями по умолчанию
     
     Args:
         model_path: путь к модели (по умолчанию ../models/best_model.pth)
-        index_path: путь к индексу (по умолчанию ../embeddings/faiss_index.bin)
+        chroma_path: путь к ChromaDB (по умолчанию ../embeddings/chromadb)
         metadata_path: путь к метаданным (по умолчанию ../embeddings/image_metadata.json)
+        collection_name: название коллекции
         
     Returns:
         Экземпляр SimilaritySearch
@@ -152,10 +183,15 @@ def create_similarity_search(
     if model_path is None:
         model_path = base_dir / "models" / "best_model.pth"
     
-    if index_path is None:
-        index_path = base_dir / "embeddings" / "faiss_index.bin"
+    if chroma_path is None:
+        chroma_path = base_dir / "embeddings" / "chromadb"
     
     if metadata_path is None:
         metadata_path = base_dir / "embeddings" / "image_metadata.json"
     
-    return SimilaritySearch(model_path, index_path, metadata_path)
+    return SimilaritySearch(
+        model_path=model_path,
+        chroma_path=chroma_path,
+        metadata_path=metadata_path,
+        collection_name=collection_name
+    )
