@@ -52,6 +52,8 @@ def create_embedding_extractor(
         else:
             device = torch.device("cpu")
     
+    print(f"Используемое устройство: {device}")
+    
     # Загружаем checkpoint
     checkpoint = torch.load(checkpoint_path, map_location=device)
     params = checkpoint['params']
@@ -63,6 +65,7 @@ def create_embedding_extractor(
     if model_name == 'efficientnet_v2_m':
         weights = getattr(models.EfficientNet_V2_M_Weights, params['model']['pretrained'])
         base_model = models.efficientnet_v2_m(weights=weights)
+        # Получаем числовое значение количества фичей
         num_features = base_model.classifier[1].in_features
         base_model.classifier[1] = nn.Linear(num_features, num_classes)
     elif model_name == 'resnet50':
@@ -85,6 +88,10 @@ def create_embedding_extractor(
     embedding_extractor = EmbeddingExtractor(base_model)
     embedding_extractor.eval()
     embedding_extractor = embedding_extractor.to(device)
+    
+    # Убеждаемся, что все параметры модели на правильном устройстве
+    for param in embedding_extractor.parameters():
+        param.data = param.data.to(device)
     
     # Определяем размерность эмбеддинга
     with torch.no_grad():
@@ -130,7 +137,10 @@ def extract_embedding_from_image(
     if not isinstance(image_tensor, torch.Tensor):
         raise TypeError(f"Expected torch.Tensor, got {type(image_tensor)}")
     image_tensor = image_tensor.unsqueeze(0)  # Добавляем batch dimension
-    image_tensor = image_tensor.to(device)
+    print(f"Изображение до перемещения: device={image_tensor.device}")
+    image_tensor = image_tensor.to(device)  # Перемещаем на то же устройство, что и модель
+    print(f"Изображение после перемещения: device={image_tensor.device}")
+    print(f"Модель: device={next(model.parameters()).device}")
     
     # Извлекаем эмбеддинг
     model.eval()

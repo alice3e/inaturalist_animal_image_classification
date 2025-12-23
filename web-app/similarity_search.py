@@ -33,10 +33,11 @@ class SimilaritySearch:
             device: устройство для вычислений
         """
         # Загружаем модель для извлечения эмбеддингов
+        # Принудительно используем CPU для избежания проблем с MPS
+        self.device = torch.device("cpu")
         self.embedding_model, self.embedding_dim, self.params = create_embedding_extractor(
-            model_path, device
+            model_path, self.device
         )
-        self.device = device if device else torch.device("cpu")
         
         # Загружаем векторную БД
         self.vector_db = VectorDatabase(
@@ -46,7 +47,10 @@ class SimilaritySearch:
         )
         
         print(f"✓ Модель загружена (embedding_dim={self.embedding_dim})")
-        print(f"✓ ChromaDB загружена ({self.vector_db.collection.count()} векторов)")
+        if self.vector_db.collection:
+            print(f"✓ ChromaDB загружена ({self.vector_db.collection.count()} векторов)")
+        else:
+            print("⚠ ChromaDB коллекция не загружена")
     
     def find_similar(
         self,
