@@ -2,6 +2,7 @@
 /animal_images
 /data/*.csv
 /models
+/embeddings
 
 # DVCLive - НЕ должен быть в Git
 /dvclive/
