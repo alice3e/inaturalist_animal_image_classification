@@ -1,5 +1,6 @@
 [core]
     remote = alice3e-remote-s3-yandex-cloud
+    autostage = true
 ['remote "alice3e-remote-s3-yandex-cloud"']
     url = s3://dvc-alice3e-bucket/animals
     endpointurl = https://storage.yandexcloud.net
