@@ -12,18 +12,49 @@ import numpy as np
 
 
 class EmbeddingExtractor(nn.Module):
-    """Модель для извлечения эмбеддингов из EfficientNet V2 M"""
+    """Модель для извлечения эмбеддингов из различных архитектур"""
     
-    def __init__(self, base_model):
+    def __init__(self, base_model, model_type='efficientnet'):
         super().__init__()
-        # Для EfficientNet V2 M: используем все слои до классификатора
-        self.base_model = base_model
+        self.model_type = model_type
+        
+        if model_type == 'efficientnet':
+            # Для EfficientNet: features + avgpool
+            self.features = base_model.features
+            self.avgpool = base_model.avgpool
+        elif model_type == 'resnet':
+            # Для ResNet: все слои кроме fc
+            self.conv1 = base_model.conv1
+            self.bn1 = base_model.bn1
+            self.relu = base_model.relu
+            self.maxpool = base_model.maxpool
+            self.layer1 = base_model.layer1
+            self.layer2 = base_model.layer2
+            self.layer3 = base_model.layer3
+            self.layer4 = base_model.layer4
+            self.avgpool = base_model.avgpool
+        else:
+            raise ValueError(f"Неподдерживаемый тип модели: {model_type}")
         
     def forward(self, x):
-        # Используем все слои до классификатора
-        x = self.base_model.features(x)
-        x = self.base_model.avgpool(x)
-        x = torch.flatten(x, 1)
+        if self.model_type == 'efficientnet':
+            x = self.features(x)
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+        elif self.model_type == 'resnet':
+            x = self.conv1(x)
+            x = self.bn1(x)
+            x = self.relu(x)
+            x = self.maxpool(x)
+            
+            x = self.layer1(x)
+            x = self.layer2(x)
+            x = self.layer3(x)
+            x = self.layer4(x)
+            
+            x = self.avgpool(x)
+            x = torch.flatten(x, 1)
+        
         return x
 
 
@@ -65,19 +96,24 @@ def create_embedding_extractor(
     if model_name == 'efficientnet_v2_m':
         weights = getattr(models.EfficientNet_V2_M_Weights, params['model']['pretrained'])
         base_model = models.efficientnet_v2_m(weights=weights)
-        # Получаем числовое значение количества фичей
-        num_features = base_model.classifier[1].in_features
+        num_features = int(base_model.classifier[1].in_features)
         base_model.classifier[1] = nn.Linear(num_features, num_classes)
+        model_type = 'efficientnet'
+        
     elif model_name == 'resnet50':
         weights = getattr(models.ResNet50_Weights, params['model']['pretrained'])
         base_model = models.resnet50(weights=weights)
-        num_features = base_model.fc.in_features
+        num_features = int(base_model.fc.in_features)
         base_model.fc = nn.Linear(num_features, num_classes)
+        model_type = 'resnet'
+        
     elif model_name == 'resnet101':
         weights = getattr(models.ResNet101_Weights, params['model']['pretrained'])
         base_model = models.resnet101(weights=weights)
-        num_features = base_model.fc.in_features
+        num_features = int(base_model.fc.in_features)
         base_model.fc = nn.Linear(num_features, num_classes)
+        model_type = 'resnet'
+        
     else:
         raise ValueError(f"Модель {model_name} не поддерживается")
     
@@ -85,7 +121,7 @@ def create_embedding_extractor(
     base_model.load_state_dict(checkpoint['model_state_dict'])
     
     # Создаем экстрактор эмбеддингов (без классификационного слоя)
-    embedding_extractor = EmbeddingExtractor(base_model)
+    embedding_extractor = EmbeddingExtractor(base_model, model_type=model_type)
     embedding_extractor.eval()
     embedding_extractor = embedding_extractor.to(device)
     

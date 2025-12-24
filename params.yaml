@@ -1,5 +1,5 @@
 model:
-  name: efficientnet_v2_m
+  name: resnet50
   pretrained: IMAGENET1K_V1
   num_classes: 5
 
@@ -10,8 +10,8 @@ training:
   optimizer: Adam
 
 augmentation:
-  resize: 384
-  crop_size: 224
+  resize: 256
+  crop_size: 256
   brightness: 0.2
   contrast: 0.2
   
